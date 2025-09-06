@@ -51,19 +51,3 @@ jobs:
     - name: Run frontend build
       working-directory: ./frontend
       run: npm run build
-
-    - name: Build Docker images
-      run: |
-        docker build -t nycad-backend ./backend
-        docker build -t nycad-frontend ./frontend
-
-    - name: (Optional) Push images to Docker Hub
-      env:
-        DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-        DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
-      run: |
-        echo $DOCKER_HUB_PASSWORD | docker login -u $DOCKER_HUB_USERNAME --password-stdin
-        docker tag nycad-backend $DOCKER_HUB_USERNAME/nycad-backend:latest
-        docker tag nycad-frontend $DOCKER_HUB_USERNAME/nycad-frontend:latest
-        docker push $DOCKER_HUB_USERNAME/nycad-backend:latest
-        docker push $DOCKER_HUB_USERNAME/nycad-frontend:latest
