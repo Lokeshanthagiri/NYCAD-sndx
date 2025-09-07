@@ -9,8 +9,10 @@ import {
   Title,
   Tooltip,
   Legend,
+  Filler, // <-- added Filler plugin
 } from 'chart.js';
 
+// Register Chart.js components including Filler
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -18,7 +20,8 @@ ChartJS.register(
   LineElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler // <-- register Filler
 );
 
 export default function TrendChart({ data }) {
@@ -39,7 +42,7 @@ export default function TrendChart({ data }) {
         borderColor: 'rgb(59, 130, 246)',
         backgroundColor: 'rgba(59, 130, 246, 0.1)',
         tension: 0.3,
-        fill: true,
+        fill: true, // <-- Filler plugin now enables this
       },
     ],
   };
@@ -63,9 +66,7 @@ export default function TrendChart({ data }) {
       y: {
         beginAtZero: false,
         ticks: {
-          callback: (value) => {
-            return value.toLocaleString();
-          },
+          callback: (value) => value.toLocaleString(),
         },
       },
     },
@@ -74,24 +75,33 @@ export default function TrendChart({ data }) {
   return (
     <div className="bg-white p-4 rounded-lg shadow">
       <h3 className="text-lg font-semibold mb-4">30-Day Trend</h3>
+      
+      {/* Chart container */}
       <div style={{ height: '300px' }}>
         <Line data={chartData} options={options} />
       </div>
+
+      {/* Percentage change info */}
       {data.length > 1 && (() => {
         const first = data[0].totalDrivers || 0;
         const last = data[data.length - 1].totalDrivers || 0;
+
         if (first === 0) {
           if (last > 0) {
             return (
               <div className="mt-2 text-sm text-gray-600">
-                <span className="text-green-600">▲ New data (+{last.toLocaleString()} drivers from 0)</span>
+                <span className="text-green-600">
+                  ▲ New data (+{last.toLocaleString()} drivers from 0)
+                </span>
               </div>
             );
           }
           return <div className="mt-2 text-sm text-gray-600">No change</div>;
         }
+
         const diff = last - first;
         const pct = Math.round(Math.abs(diff) / first * 100);
+
         return (
           <div className="mt-2 text-sm text-gray-600">
             {diff >= 0 ? (
