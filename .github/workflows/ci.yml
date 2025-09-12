@@ -1,106 +1,103 @@
-name: CI Pipeline
+name: NYCAD CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
-  security-and-quality:
+  build:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fhv
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-      # Checkout source code
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      # --------------------------------------
-      # Backend Docker Build + Trivy Scan
-      # --------------------------------------
-      - name: Build backend image
-        run: docker build -t nycad-backend ./backend
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: 20
 
-      - name: Scan backend with Trivy
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: nycad-backend:latest
-          format: table
-          exit-code: 0
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
-          output: trivy-backend.txt
+    # -------------------------
+    # Backend
+    # -------------------------
+    - name: Install backend dependencies
+      working-directory: ./backend
+      run: npm install
 
-      # --------------------------------------
-      # Frontend Docker Build + Trivy Scan
-      # --------------------------------------
-      - name: Build frontend image
-        run: docker build -t nycad-frontend ./frontend
+    - name: Run backend tests
+      working-directory: ./backend
+      run: |
+        echo "Add backend tests here"
+        # npm test
 
-      - name: Scan frontend with Trivy
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: nycad-frontend:latest
-          format: table
-          exit-code: 0
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
-          output: trivy-frontend.txt
+    - name: Check backend dependencies for vulnerabilities
+      working-directory: ./backend
+      run: npm audit --audit-level=high || true
 
-      # --------------------------------------
-      # Node.js Dependency Audit (Backend & Frontend)
-      # --------------------------------------
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+    # -------------------------
+    # Frontend
+    # -------------------------
+    - name: Install frontend dependencies
+      working-directory: ./frontend
+      run: npm install
 
-      - name: Install backend dependencies
-        working-directory: ./backend
-        run: npm install
+    - name: Run frontend build
+      working-directory: ./frontend
+      run: npm run build
 
-      - name: Run npm audit (backend)
-        working-directory: ./backend
-        run: npm audit --audit-level=high || true
+    - name: Check frontend dependencies for vulnerabilities
+      working-directory: ./frontend
+      run: npm audit --audit-level=high || true
 
-      - name: Install frontend dependencies
-        working-directory: ./frontend
-        run: npm install
+    # -------------------------
+    # Build Docker Images (before scanning)
+    # -------------------------
+    - name: Build Docker images
+      run: |
+        docker build -t nycad-backend ./backend
+        docker build -t nycad-frontend ./frontend
 
-      - name: Run npm audit (frontend)
-        working-directory: ./frontend
-        run: npm audit --audit-level=high || true
+    # -------------------------
+    # Security Scanning
+    # -------------------------
 
-      # --------------------------------------
-      # SonarQube Code Quality Scan
-      # --------------------------------------
-      - name: Install SonarScanner
-        run: |
-          curl -sSLo sonar-scanner.zip \
-            https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-          unzip sonar-scanner.zip -d $HOME
-          echo "$HOME/sonar-scanner-5.0.1.3006-linux/bin" >> $GITHUB_PATH
+    # Trivy for container scanning
+    - name: Scan backend container with Trivy
+      uses: aquasecurity/trivy-action@0.12.0
+      with:
+        image-ref: nycad-backend:latest
+        format: 'table'
+        exit-code: '0' # don't fail pipeline, just report
+        ignore-unfixed: true
 
-      - name: Run SonarQube Scan
-        run: |
-          sonar-scanner \
-            -Dsonar.projectKey=nycad-sndx \
-            -Dsonar.sources=. \
-            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+    - name: Scan frontend container with Trivy
+      uses: aquasecurity/trivy-action@0.12.0
+      with:
+        image-ref: nycad-frontend:latest
+        format: 'table'
+        exit-code: '0'
+        ignore-unfixed: true
 
-      # --------------------------------------
-      # Upload Reports as Artifacts
-      # --------------------------------------
-      - name: Upload Trivy backend report
-        uses: actions/upload-artifact@v3
-        with:
-          name: trivy-backend-report
-          path: trivy-backend.txt
-
-      - name: Upload Trivy frontend report
-        uses: actions/upload-artifact@v3
-        with:
-          name: trivy-frontend-report
-          path: trivy-frontend.txt
+    # SonarQube Code Scanning
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@v2.0.0
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
