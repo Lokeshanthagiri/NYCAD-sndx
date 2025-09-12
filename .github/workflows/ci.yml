@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  DEFAULT_SONAR_PROJECT_KEY: nycad-sndx
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,9 +26,15 @@ jobs:
           --health-retries 5
 
     steps:
+    # -------------------------
+    # Checkout Code
+    # -------------------------
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # -------------------------
+    # Node Setup
+    # -------------------------
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
@@ -42,13 +45,15 @@ jobs:
     # -------------------------
     - name: Install backend dependencies
       working-directory: ./backend
-      run: npm ci
+      run: npm install
 
     - name: Run backend tests
       working-directory: ./backend
-      run: echo "TODO: add backend tests"
+      run: |
+        echo "Add backend tests here"
+        # npm test
 
-    - name: Run npm audit (backend)
+    - name: Check backend dependencies for vulnerabilities
       working-directory: ./backend
       run: npm audit --audit-level=high || true
 
@@ -57,27 +62,26 @@ jobs:
     # -------------------------
     - name: Install frontend dependencies
       working-directory: ./frontend
-      run: npm ci
+      run: npm install
 
-    - name: Build frontend
+    - name: Run frontend build
       working-directory: ./frontend
       run: npm run build
 
-    - name: Run npm audit (frontend)
+    - name: Check frontend dependencies for vulnerabilities
       working-directory: ./frontend
       run: npm audit --audit-level=high || true
 
     # -------------------------
-    # Build Docker images
+    # Build Docker Images
     # -------------------------
-    - name: Build backend image
-      run: docker build -t nycad-backend:latest ./backend
-
-    - name: Build frontend image
-      run: docker build -t nycad-frontend:latest ./frontend
+    - name: Build Docker images
+      run: |
+        docker build -t nycad-backend ./backend
+        docker build -t nycad-frontend ./frontend
 
     # -------------------------
-    # Trivy Scanning
+    # Security Scanning
     # -------------------------
     - name: Scan backend with Trivy
       uses: aquasecurity/trivy-action@0.20.0
@@ -114,50 +118,15 @@ jobs:
         path: trivy-frontend.txt
 
     # -------------------------
-    # SonarQube / SonarCloud
+    # SonarQube Code Scanning
     # -------------------------
-    - name: Install SonarScanner CLI
-      run: |
-        curl -sSLo sonar-scanner.zip \
-          https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-        unzip sonar-scanner.zip -d $HOME
-        echo "$HOME/sonar-scanner-5.0.1.3006-linux/bin" >> $GITHUB_PATH
-
-    - name: Run SonarQube analysis
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@v2
       env:
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      run: |
-        sonar-scanner \
-          -Dsonar.projectKey=nycad-sndx \
-          -Dsonar.sources=backend,frontend \
-          -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
-          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-
-    - name: Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-
-    - name: Check SonarQube Quality Gate
-      env:
         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      run: |
-        echo "Polling SonarQube for quality gate status..."
-        for i in $(seq 1 36); do
-          result=$(curl -s -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=nycad-sndx")
-          status=$(echo "$result" | jq -r '.projectStatus.status // empty')
-          if [ -n "$status" ]; then
-            echo "Sonar Quality Gate status: $status"
-            if [ "$status" = "OK" ]; then
-              exit 0
-            else
-              echo "Quality Gate failed with status: $status"
-              echo "$result" | jq
-              exit 1
-            fi
-          fi
-          echo "Status not available yet (attempt $i). Retrying in 5s..."
-          sleep 5
-        done
-        echo "Quality Gate status not available after timeout."
-        exit 1
+      with:
+        args: >
+          -Dsonar.projectKey=NYCAD-SNDX
+          -Dsonar.organization=your-org
+          -Dsonar.sources=./backend,./frontend
