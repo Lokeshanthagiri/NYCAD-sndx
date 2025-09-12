@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  # Default project key (can be overridden by secret SONAR_PROJECT_KEY)
+  DEFAULT_SONAR_PROJECT_KEY: nycad-sndx
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,75 +33,172 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    # -------------------------
+    # Node setup & dependency checks
+    # -------------------------
     - name: Set up Node.js
       uses: actions/setup-node@v3
       with:
         node-version: 20
 
-    # -------------------------
-    # Backend
-    # -------------------------
     - name: Install backend dependencies
       working-directory: ./backend
-      run: npm install
+      run: npm ci
 
-    - name: Run backend tests
+    - name: Run backend tests (placeholder)
       working-directory: ./backend
       run: |
         echo "Add backend tests here"
         # npm test
 
-    - name: Check backend dependencies for vulnerabilities
+    - name: Run npm audit (backend)
       working-directory: ./backend
       run: npm audit --audit-level=high || true
 
-    # -------------------------
-    # Frontend
-    # -------------------------
     - name: Install frontend dependencies
       working-directory: ./frontend
-      run: npm install
+      run: npm ci
 
-    - name: Run frontend build
+    - name: Build frontend
       working-directory: ./frontend
       run: npm run build
 
-    - name: Check frontend dependencies for vulnerabilities
+    - name: Run npm audit (frontend)
       working-directory: ./frontend
       run: npm audit --audit-level=high || true
 
     # -------------------------
-    # Build Docker Images (before scanning)
+    # Build Docker images (so Trivy can scan them)
     # -------------------------
-    - name: Build Docker images
-      run: |
-        docker build -t nycad-backend ./backend
-        docker build -t nycad-frontend ./frontend
+    - name: Build backend image
+      run: docker build -t nycad-backend:latest ./backend
+
+    - name: Build frontend image
+      run: docker build -t nycad-frontend:latest ./frontend
 
     # -------------------------
-    # Security Scanning
+    # Trivy container scanning
     # -------------------------
-
-    # Trivy for container scanning
-    - name: Scan backend container with Trivy
-      uses: aquasecurity/trivy-action@0.12.0
+    - name: Scan backend with Trivy
+      uses: aquasecurity/trivy-action@v0.12.0
       with:
         image-ref: nycad-backend:latest
-        format: 'table'
-        exit-code: '0' # don't fail pipeline, just report
+        format: table
+        exit-code: 0
         ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+        output: trivy-backend.txt
 
-    - name: Scan frontend container with Trivy
-      uses: aquasecurity/trivy-action@0.12.0
+    - name: Scan frontend with Trivy
+      uses: aquasecurity/trivy-action@v0.12.0
       with:
         image-ref: nycad-frontend:latest
-        format: 'table'
-        exit-code: '0'
+        format: table
+        exit-code: 0
         ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+        output: trivy-frontend.txt
 
-    # SonarQube Code Scanning
-    - name: SonarQube Scan
-      uses: sonarsource/sonarqube-scan-action@v2.0.0
+    - name: Upload Trivy backend report
+      uses: actions/upload-artifact@v3
+      with:
+        name: trivy-backend-report
+        path: trivy-backend.txt
+
+    - name: Upload Trivy frontend report
+      uses: actions/upload-artifact@v3
+      with:
+        name: trivy-frontend-report
+        path: trivy-frontend.txt
+
+    # -------------------------
+    # SonarQube / SonarCloud scan
+    # -------------------------
+    # Required secrets:
+    # - SONAR_HOST_URL  (e.g. https://sonarcloud.io or http://your-sonarqube-host:9000)
+    # - SONAR_TOKEN     (token from SonarQube or SonarCloud)
+    # Optional:
+    # - SONAR_ORGANIZATION (required for SonarCloud projects; optional for self-hosted SonarQube)
+    # - SONAR_PROJECT_KEY  (if you prefer a custom project key; default: nycad-sndx)
+
+    - name: Prepare Sonar environment variables
+      run: |
+        echo "SONAR_HOST_URL=${{ secrets.SONAR_HOST_URL }}" >> $GITHUB_ENV
+        echo "SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}" >> $GITHUB_ENV
+        # If you provided a project key in secrets use it, else fall back to DEFAULT_SONAR_PROJECT_KEY
+        if [ -n "${{ secrets.SONAR_PROJECT_KEY }}" ]; then
+          echo "SONAR_PROJECT_KEY=${{ secrets.SONAR_PROJECT_KEY }}" >> $GITHUB_ENV
+        else
+          echo "SONAR_PROJECT_KEY=${{ env.DEFAULT_SONAR_PROJECT_KEY }}" >> $GITHUB_ENV
+        fi
+        # If organization is provided (needed for SonarCloud) export SONAR_ORGANIZATION
+        if [ -n "${{ secrets.SONAR_ORGANIZATION }}" ]; then
+          echo "SONAR_ORGANIZATION=${{ secrets.SONAR_ORGANIZATION }}" >> $GITHUB_ENV
+        fi
+
+    - name: Install SonarScanner CLI
+      run: |
+        curl -sSLo sonar-scanner.zip \
+          https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+        unzip sonar-scanner.zip -d $HOME
+        echo "$HOME/sonar-scanner-5.0.1.3006-linux/bin" >> $GITHUB_PATH
+
+    - name: Run SonarQube analysis
       env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+        SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
+        SONAR_ORGANIZATION: ${{ env.SONAR_ORGANIZATION }}
+      run: |
+        # Build additional scanner args (organization only when provided)
+        EXTRA_OPTS=""
+        if [ -n "${SONAR_ORGANIZATION}" ]; then
+          EXTRA_OPTS="-Dsonar.organization=${SONAR_ORGANIZATION}"
+        fi
+
+        # Run scanner across both frontend & backend folders (adjust sonar.sources if you prefer)
+        sonar-scanner \
+          -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+          -Dsonar.sources=backend,frontend \
+          -Dsonar.host.url=${SONAR_HOST_URL} \
+          -Dsonar.login=${SONAR_TOKEN} \
+          $EXTRA_OPTS
+
+    # -------------------------
+    # Wait for Sonar Quality Gate and fail if NOT OK
+    # -------------------------
+    - name: Install jq (used to parse Sonar API response)
+      run: sudo apt-get update && sudo apt-get install -y jq
+
+    - name: Check SonarQube Quality Gate
+      env:
+        SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+        SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
+      run: |
+        echo "Polling SonarQube for quality gate status..."
+        # Try for up to ~3 minutes (36 attempts x 5s)
+        for i in $(seq 1 36); do
+          result=$(curl -s -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}")
+          status=$(echo "$result" | jq -r '.projectStatus.status // empty')
+
+          if [ -n "$status" ]; then
+            echo "Sonar Quality Gate status: $status"
+            if [ "$status" = "OK" ]; then
+              exit 0
+            else
+              echo "Quality Gate failed with status: $status"
+              # Print details then fail
+              echo "$result" | jq
+              exit 1
+            fi
+          fi
+
+          echo "Status not available yet (attempt $i). Retrying in 5s..."
+          sleep 5
+        done
+
+        echo "Quality Gate status not available after timeout."
+        exit 1
