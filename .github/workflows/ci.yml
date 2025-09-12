@@ -7,7 +7,6 @@ on:
     branches: [ main ]
 
 env:
-  # Default project key (can be overridden by secret SONAR_PROJECT_KEY)
   DEFAULT_SONAR_PROJECT_KEY: nycad-sndx
 
 jobs:
@@ -31,16 +30,16 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    # -------------------------
-    # Node setup & dependency checks
-    # -------------------------
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: 20
 
+    # -------------------------
+    # Backend
+    # -------------------------
     - name: Install backend dependencies
       working-directory: ./backend
       run: npm ci
@@ -55,6 +54,9 @@ jobs:
       working-directory: ./backend
       run: npm audit --audit-level=high || true
 
+    # -------------------------
+    # Frontend
+    # -------------------------
     - name: Install frontend dependencies
       working-directory: ./frontend
       run: npm ci
@@ -68,7 +70,7 @@ jobs:
       run: npm audit --audit-level=high || true
 
     # -------------------------
-    # Build Docker images (so Trivy can scan them)
+    # Build Docker images
     # -------------------------
     - name: Build backend image
       run: docker build -t nycad-backend:latest ./backend
@@ -77,10 +79,10 @@ jobs:
       run: docker build -t nycad-frontend:latest ./frontend
 
     # -------------------------
-    # Trivy container scanning
+    # Trivy scanning (latest supported action)
     # -------------------------
     - name: Scan backend with Trivy
-      uses: aquasecurity/trivy-action@v0.12.0
+      uses: aquasecurity/trivy-action@0.20.0
       with:
         image-ref: nycad-backend:latest
         format: table
@@ -91,7 +93,7 @@ jobs:
         output: trivy-backend.txt
 
     - name: Scan frontend with Trivy
-      uses: aquasecurity/trivy-action@v0.12.0
+      uses: aquasecurity/trivy-action@0.20.0
       with:
         image-ref: nycad-frontend:latest
         format: table
@@ -102,13 +104,13 @@ jobs:
         output: trivy-frontend.txt
 
     - name: Upload Trivy backend report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: trivy-backend-report
         path: trivy-backend.txt
 
     - name: Upload Trivy frontend report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: trivy-frontend-report
         path: trivy-frontend.txt
@@ -116,24 +118,15 @@ jobs:
     # -------------------------
     # SonarQube / SonarCloud scan
     # -------------------------
-    # Required secrets:
-    # - SONAR_HOST_URL  (e.g. https://sonarcloud.io or http://your-sonarqube-host:9000)
-    # - SONAR_TOKEN     (token from SonarQube or SonarCloud)
-    # Optional:
-    # - SONAR_ORGANIZATION (required for SonarCloud projects; optional for self-hosted SonarQube)
-    # - SONAR_PROJECT_KEY  (if you prefer a custom project key; default: nycad-sndx)
-
-    - name: Prepare Sonar environment variables
+    - name: Prepare Sonar environment
       run: |
         echo "SONAR_HOST_URL=${{ secrets.SONAR_HOST_URL }}" >> $GITHUB_ENV
         echo "SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}" >> $GITHUB_ENV
-        # If you provided a project key in secrets use it, else fall back to DEFAULT_SONAR_PROJECT_KEY
         if [ -n "${{ secrets.SONAR_PROJECT_KEY }}" ]; then
           echo "SONAR_PROJECT_KEY=${{ secrets.SONAR_PROJECT_KEY }}" >> $GITHUB_ENV
         else
           echo "SONAR_PROJECT_KEY=${{ env.DEFAULT_SONAR_PROJECT_KEY }}" >> $GITHUB_ENV
         fi
-        # If organization is provided (needed for SonarCloud) export SONAR_ORGANIZATION
         if [ -n "${{ secrets.SONAR_ORGANIZATION }}" ]; then
           echo "SONAR_ORGANIZATION=${{ secrets.SONAR_ORGANIZATION }}" >> $GITHUB_ENV
         fi
@@ -152,13 +145,10 @@ jobs:
         SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
         SONAR_ORGANIZATION: ${{ env.SONAR_ORGANIZATION }}
       run: |
-        # Build additional scanner args (organization only when provided)
         EXTRA_OPTS=""
         if [ -n "${SONAR_ORGANIZATION}" ]; then
           EXTRA_OPTS="-Dsonar.organization=${SONAR_ORGANIZATION}"
         fi
-
-        # Run scanner across both frontend & backend folders (adjust sonar.sources if you prefer)
         sonar-scanner \
           -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
           -Dsonar.sources=backend,frontend \
@@ -166,10 +156,7 @@ jobs:
           -Dsonar.login=${SONAR_TOKEN} \
           $EXTRA_OPTS
 
-    # -------------------------
-    # Wait for Sonar Quality Gate and fail if NOT OK
-    # -------------------------
-    - name: Install jq (used to parse Sonar API response)
+    - name: Install jq
       run: sudo apt-get update && sudo apt-get install -y jq
 
     - name: Check SonarQube Quality Gate
@@ -179,26 +166,21 @@ jobs:
         SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
       run: |
         echo "Polling SonarQube for quality gate status..."
-        # Try for up to ~3 minutes (36 attempts x 5s)
         for i in $(seq 1 36); do
           result=$(curl -s -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}")
           status=$(echo "$result" | jq -r '.projectStatus.status // empty')
-
           if [ -n "$status" ]; then
             echo "Sonar Quality Gate status: $status"
             if [ "$status" = "OK" ]; then
               exit 0
             else
               echo "Quality Gate failed with status: $status"
-              # Print details then fail
               echo "$result" | jq
               exit 1
             fi
           fi
-
           echo "Status not available yet (attempt $i). Retrying in 5s..."
           sleep 5
         done
-
         echo "Quality Gate status not available after timeout."
         exit 1
