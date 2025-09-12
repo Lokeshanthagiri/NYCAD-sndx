@@ -127,6 +127,6 @@ jobs:
         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
       with:
         args: >
-          -Dsonar.projectKey=NYCAD-SNDX
-          -Dsonar.organization=your-org
+          -Dsonar.projectKey=Lokeshanthagiri_NYCAD-sndx
+          -Dsonar.organization=lokeshanthagiri
           -Dsonar.sources=./backend,./frontend
