@@ -34,6 +34,9 @@ jobs:
       with:
         node-version: 20
 
+    # -------------------------
+    # Backend
+    # -------------------------
     - name: Install backend dependencies
       working-directory: ./backend
       run: npm install
@@ -44,6 +47,13 @@ jobs:
         echo "Add backend tests here"
         # npm test
 
+    - name: Check backend dependencies for vulnerabilities
+      working-directory: ./backend
+      run: npm audit --audit-level=high || true
+
+    # -------------------------
+    # Frontend
+    # -------------------------
     - name: Install frontend dependencies
       working-directory: ./frontend
       run: npm install
@@ -51,3 +61,43 @@ jobs:
     - name: Run frontend build
       working-directory: ./frontend
       run: npm run build
+
+    - name: Check frontend dependencies for vulnerabilities
+      working-directory: ./frontend
+      run: npm audit --audit-level=high || true
+
+    # -------------------------
+    # Security Scanning
+    # -------------------------
+
+    # Trivy for container scanning
+    - name: Scan backend container with Trivy
+      uses: aquasecurity/trivy-action@0.12.0
+      with:
+        image-ref: nycad-backend:latest
+        format: 'table'
+        exit-code: '0' # don't fail pipeline, just report
+        ignore-unfixed: true
+
+    - name: Scan frontend container with Trivy
+      uses: aquasecurity/trivy-action@0.12.0
+      with:
+        image-ref: nycad-frontend:latest
+        format: 'table'
+        exit-code: '0'
+        ignore-unfixed: true
+
+    # SonarQube Code Scanning
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@v2.0.0
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+    # -------------------------
+    # Build Docker Images
+    # -------------------------
+    - name: Build Docker images
+      run: |
+        docker build -t nycad-backend ./backend
+        docker build -t nycad-frontend ./frontend
